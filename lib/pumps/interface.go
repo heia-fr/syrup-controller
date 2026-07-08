@@ -50,7 +50,11 @@ func NewSerialCommander(portName string) (*SerialCommander, error) {
 }
 
 func (c *SerialCommander) reopen() error {
-	c.port.Close()
+	err := c.port.Close()
+	if err != nil {
+		slog.Error("Failed to close serial port", "service", "cmdr", "port", c.portName, "error", err)
+	}
+	time.Sleep(1 * time.Second)
 	return c.Open()
 }
 
