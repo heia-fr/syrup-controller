@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
+#
+# SPDX-License-Identifier: MIT
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm
+      - arm64
+    ldflags:
+      - -s -w -X syrup-controller/cmd.version={{.Version}}
+
+archives:
+  - formats: ['tar.gz']
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+nfpms:
+  - maintainer: Jacques Supcik <jacques.supcik@hefr.ch>
+    description: Syrup Controller for Raspberry Pi
+    homepage: https://github.com/supcik/syrup-controller
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/sbin
+    scripts:
+      postinstall: 'scripts/postinstall.sh'
+      postremove: 'scripts/postremove.sh'
+    contents:
+      - src: systemd/syrup-controller
+        dst: /etc/default/syrup-controller
+      - src: systemd/syrup-controller.service
+        dst: /usr/lib/systemd/system/syrup-controller.service
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+release:
+  mode: keep-existing

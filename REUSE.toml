@@ -1,0 +1,7 @@
+version = 1
+
+[[annotations]]
+precedence = "override"
+path = [".gitignore", "README.md", "go.sum"]
+SPDX-FileCopyrightText = "2026 Jacques Supcik <jacques.supcik@hefr.ch>"
+SPDX-License-Identifier = "MIT"

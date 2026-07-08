@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
+#
+# SPDX-License-Identifier: MIT
+
+[Unit]
+Description=Syrup Machine Pumps Controller
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+Environment="SYRUP_MACHINE_MQTT_BROKER_URL=tcp://mqtt.local:1883"
+Environment="SYRUP_MACHINE_MQTT_BASE_TOPIC=syrup-machine"
+EnvironmentFile=-/etc/default/syrup-controller
+ExecStart=/usr/sbin/syrup-controller \
+  --mqtt-broker=${SYRUP_MACHINE_MQTT_BROKER_URL} \
+  --mqtt-base-topic=${SYRUP_MACHINE_MQTT_BASE_TOPIC}
+StartLimitBurst=5
+StartLimitIntervalSec=10
+
+[Install]
+WantedBy=multi-user.target

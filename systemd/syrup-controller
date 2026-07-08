@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
+#
+# SPDX-License-Identifier: MIT
+
+SYRUP_MACHINE_MQTT_BROKER_URL="tcp://mqtt.local:1883"
+SYRUP_MACHINE_MQTT_BASE_TOPIC=syrup-machine
