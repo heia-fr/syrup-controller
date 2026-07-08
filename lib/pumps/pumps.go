@@ -15,8 +15,6 @@ type Pump struct {
 	stopTime    time.Time
 	doCheckCup  bool
 	pouringTime time.Duration
-	actionChan  chan byte
-	doneChan    chan byte
 }
 
 func (p *Pump) stop() {
@@ -56,11 +54,6 @@ func (h *Handler) isCupPresent(id int) bool {
 	return h.sensor&check == check
 }
 
-func (h *Handler) stop(id int) {
-	h.pumps[id].stop()
-	h.rincing = false
-}
-
 func (h *Handler) stopAll() {
 	slog.Info("Stopping all pumps", "service", "pumps")
 	for _, p := range h.pumps {
@@ -89,7 +82,10 @@ func (h *Handler) softReset() {
 	h.stopAll()
 	h.rincing = false
 	h.state = 0x0
-	h.cmdr.Send(0)
+	_, err := h.cmdr.Send(0)
+	if err != nil {
+		slog.Error("Failed to send stop command during soft reset", "service", "pumps", "error", err)
+	}
 	val, err := h.cmdr.Send(kSoftReset)
 	if err != nil {
 		slog.Error("Failed to send soft reset command", "service", "pumps", "error", err)
@@ -117,7 +113,11 @@ func (h *Handler) check(done chan byte) error {
 	}
 
 	now := time.Now()
-	h.readSensor()
+	err := h.readSensor()
+	if err != nil {
+		return err
+	}
+
 	// Check if any pump should be stopped due to cup removal or duration elapsed
 	for i, p := range h.pumps {
 		if p.running {

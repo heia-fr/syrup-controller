@@ -70,6 +70,9 @@ func run() {
 	cancel()
 	wg.Wait()
 
-	serialCommander.Send(0)
+	_, err = serialCommander.Send(0)
+	if err != nil {
+		slog.Error("Failed to stop pumps", "error", err)
+	}
 	slog.Info("Bye")
 }

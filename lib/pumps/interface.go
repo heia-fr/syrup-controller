@@ -32,8 +32,7 @@ func (c *SerialCommander) Open() error {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		c.port.SetReadTimeout(commandTimeout)
-		return nil
+		return c.port.SetReadTimeout(commandTimeout)
 	}
 }
 
@@ -42,13 +41,17 @@ func NewSerialCommander(portName string) (*SerialCommander, error) {
 		BaudRate: 19200,
 	}
 	c := SerialCommander{portName: portName, mode: mode}
-	c.Open()
+	err := c.Open()
+	if err != nil {
+		slog.Error("Failed to open serial port", "service", "cmdr", "port", portName, "error", err)
+		return nil, err
+	}
 	return &c, nil
 }
 
-func (c *SerialCommander) reopen() {
+func (c *SerialCommander) reopen() error {
 	c.port.Close()
-	c.Open()
+	return c.Open()
 }
 
 func (c *SerialCommander) Send(cmd byte) (byte, error) {
@@ -57,13 +60,19 @@ func (c *SerialCommander) Send(cmd byte) (byte, error) {
 		err = c.port.ResetInputBuffer()
 		if err != nil {
 			slog.Error("Failed to reset input buffer", "service", "cmdr", "error", err)
-			c.reopen()
+			err = c.reopen()
+			if err != nil {
+				slog.Error("Failed to reopen serial port", "service", "cmdr", "port", c.portName, "error", err)
+			}
 			continue
 		}
 		err = c.port.ResetOutputBuffer()
 		if err != nil {
 			slog.Error("Failed to reset output buffer", "service", "cmdr", "error", err)
-			c.reopen()
+			err = c.reopen()
+			if err != nil {
+				slog.Error("Failed to reopen serial port", "service", "cmdr", "port", c.portName, "error", err)
+			}
 			continue
 		}
 
@@ -173,6 +182,9 @@ func (h *Handler) Run(ctx context.Context, wg *sync.WaitGroup) {
 		case <-time.After(checkPeriod):
 			// No command received, check pump states
 		}
-		h.check(h.doneChan)
+		err := h.check(h.doneChan)
+		if err != nil {
+			slog.Error("Error during pump check", "service", "pumps", "error", err)
+		}
 	}
 }
