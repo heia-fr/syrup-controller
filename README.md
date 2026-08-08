@@ -1,5 +1,10 @@
 # Syrup Controller (Python)
 
+[![CI](https://github.com/heia-fr/syrup-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/heia-fr/syrup-controller/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2Fheia--fr%2Fsyrup--controller-blue)](https://ghcr.io/heia-fr/syrup-controller)
+
 Python service that connects a syrup machine controller to MQTT.
 
 ## Requirements
