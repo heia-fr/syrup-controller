@@ -45,14 +45,29 @@ async def daemon(
 
 @app.command()
 def main(  # noqa
-    debug: bool = Option(False, help="Enable debug logging"),
-    quiet: bool = Option(False, help="Enable quiet logging"),
+    debug: bool = Option(False, help="Enable debug logging", envvar="SYRUP_DEBUG"),
+    quiet: bool = Option(False, help="Enable quiet logging", envvar="SYRUP_QUIET"),
     simulator: bool = Option(False, help="Use pumps simulator instead of UART"),
-    uart_port: str = Option("/dev/ttyAMA0", help="UART port for pumps"),
-    mqtt_url: str = Option("mqtt://test.mosquitto.org:1883", help="MQTT broker URL"),
-    mqtt_base_topic: str = Option("syrup", help="MQTT base topic"),
-    mqtt_username: str = Option(None, help="MQTT username"),
-    mqtt_password: str = Option(None, help="MQTT password"),
+    uart_port: str = Option(
+        "/dev/ttyAMA0", help="UART port for pumps", envvar="SYRUP_UART_PORT"
+    ),
+    uart_baudrate: int = Option(
+        9600, help="UART baudrate for pumps", envvar="SYRUP_UART_BAUDRATE"
+    ),
+    mqtt_url: str = Option(
+        "mqtt://test.mosquitto.org:1883",
+        help="MQTT broker URL",
+        envvar="SYRUP_MQTT_URL",
+    ),
+    mqtt_base_topic: str = Option(
+        "syrup", help="MQTT base topic", envvar="SYRUP_MQTT_BASE_TOPIC"
+    ),
+    mqtt_username: str = Option(
+        None, help="MQTT username", envvar="SYRUP_MQTT_USERNAME"
+    ),
+    mqtt_password: str = Option(
+        None, help="MQTT password", envvar="SYRUP_MQTT_PASSWORD"
+    ),
 ):
     """
     SYRUP-CONTROLLER
@@ -77,7 +92,7 @@ def main(  # noqa
             pumps = PumpsSimulator()
         else:
             logger.info("Starting Controller with Pumps UART")
-            pumps = PumpsUART.create(uart_port)
+            pumps = PumpsUART.create(uart_port, uart_baudrate)
         asyncio.run(
             daemon(pumps, mqtt_url, mqtt_base_topic, mqtt_username, mqtt_password)
         )
