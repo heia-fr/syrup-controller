@@ -1,0 +1,16 @@
+version = 1
+
+[[annotations]]
+path = [
+    "**/*.toml",
+    "justfile",
+    "README.md",
+    ".gitignore",
+    ".pre-commit-config.yaml",
+    ".github/workflows/ci.yml",
+    ".python-version",
+    "Dockerfile",
+    "uv.lock",
+]
+SPDX-FileCopyrightText = "2026 Jacques Supcik <jacques.supcik@hefr.ch>"
+SPDX-License-Identifier = "MIT"

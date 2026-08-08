@@ -1,0 +1,46 @@
+[project]
+name = "syrup-controller-py"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiomqtt>=2.5.1",
+    "loguru>=0.7.3",
+    "pyserial-asyncio>=0.6",
+    "typer>=0.27.1",
+]
+
+[project.scripts]
+syrup-controller = "syrup_controller.cli:app"
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E", # pycodestyle errors
+    "F", # pyflakes
+    "W", # pycodestyle warnings
+    "I", # import sorting
+    "N", # pep8-naming
+    "UP", # pyupgrade
+    "B", # bugbear
+    "C4", # comprehensions
+    "SIM", # simplify
+    "RUF", # Ruff-specific rules
+    "Q", # flake8-quotes
+    "PL", # flake8-print
+    "C90", # flake8-comprehensions
+
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
