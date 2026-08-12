@@ -4,6 +4,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from typing import override
 
 import serial_asyncio
 from loguru import logger
@@ -16,11 +17,16 @@ RESET_COMMAND = 0xC0  # Reset command for pumps
 
 @dataclass
 class PumpsUART(PumpsBase):
+    port: str = "/dev/ttyAMA0"
+    baudrate: int = 19200
+    stream_reader: asyncio.StreamReader | None = None
+    stream_writer: asyncio.StreamWriter | None = None
 
-    stream_reader: asyncio.StreamReader
-    stream_writer: asyncio.StreamWriter
-
+    @override
     async def cmd(self, message: int) -> int | None:
+        if self.stream_writer is None or self.stream_reader is None:
+            raise RuntimeError("UART connection not established")
+
         await self.stream_writer.drain()
         self.stream_writer.write(bytes([message]))
         await self.stream_writer.drain()
@@ -40,11 +46,12 @@ class PumpsUART(PumpsBase):
             return None
         return result[0]
 
-    @classmethod
-    async def create(cls, port: str, baudrate: int = 9600) -> "PumpsUART":
-        logger.info(f"Opening UART connection on {port} at {baudrate} baud")
-        stream_reader, stream_writer = await serial_asyncio.open_serial_connection(
-            url=port, baudrate=baudrate
+    @override
+    async def connect(self):
+        logger.info(f"Opening UART connection on {self.port} at {self.baudrate} baud")
+        self.stream_reader, self.stream_writer = (
+            await serial_asyncio.open_serial_connection(
+                url=self.port, baudrate=self.baudrate
+            )
         )
-        logger.info(f"UART connection established on {port} at {baudrate} baud")
-        return cls(stream_reader=stream_reader, stream_writer=stream_writer)
+        logger.info("UART connection established.")

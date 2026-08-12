@@ -5,6 +5,7 @@
 from datetime import timedelta
 
 import pytest
+from aiomqtt import Client as MQTTClient
 from loguru import logger
 
 from syrup_controller import RESET_COMMAND, SyrupController
@@ -21,6 +22,9 @@ class RecordingPumps(PumpsBase):
     async def cmd(self, message: int) -> int | None:
         self.messages.append(message)
         return None
+
+    async def connect(self):
+        pass
 
 
 @pytest.mark.asyncio
@@ -47,15 +51,20 @@ async def test_simulator_returns_current_cup_state() -> None:
 
 @pytest.mark.asyncio
 async def test_controller_pour_and_stop_update_internal_state() -> None:
-    controller = SyrupController(pumps=PumpsSimulator(), do_check_cup=False)
-    controller.start_handler_if_needed = lambda: None
+    controller = SyrupController(
+        pumps=PumpsSimulator(),
+        mqtt_client=MQTTClient(hostname="test.mosquitto.org", port=1883),
+        mqtt_base_topic="heiafr/ms-test",
+        do_check_cup=False,
+    )
+    controller._start_handler_if_needed = lambda: None
 
-    await controller.pour(1, duration=timedelta(seconds=1))
+    await controller._pour(1, duration=timedelta(seconds=1))
 
     assert 1 in controller.pouring
     assert 1 in controller.stopping
 
-    await controller.stop(1)
+    await controller._stop(1)
 
     assert 1 not in controller.pouring
     assert 1 not in controller.stopping
@@ -64,10 +73,15 @@ async def test_controller_pour_and_stop_update_internal_state() -> None:
 @pytest.mark.asyncio
 async def test_controller_reset_sends_reset_and_clears_state() -> None:
     pumps = RecordingPumps()
-    controller = SyrupController(pumps=pumps, do_check_cup=False)
-    controller.start_handler_if_needed = lambda: None
+    controller = SyrupController(
+        pumps=pumps,
+        mqtt_client=MQTTClient(hostname="test.mosquitto.org", port=1883),
+        mqtt_base_topic="heiafr/ms-test",
+        do_check_cup=False,
+    )
+    controller._start_handler_if_needed = lambda: None
 
-    await controller.pour(1, duration=timedelta(seconds=1))
+    await controller._pour(1, duration=timedelta(seconds=1))
     assert controller.pouring
 
     await controller.reset()

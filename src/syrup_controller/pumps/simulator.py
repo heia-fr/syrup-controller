@@ -4,6 +4,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import override
 
 from loguru import logger
 
@@ -35,47 +36,71 @@ class PumpsSimulator(PumpsBase):
             self.pump_state |= 1 << (6 - i)
             await asyncio.sleep(2)
 
-    async def cmd(self, message: int) -> int | None:  # noqa C901,PLR0912
+    @override
+    async def connect(self):
+        logger.info("Simulated pumps connected.")
+
+    @staticmethod
+    def _iter_changed_bits(new_state: int, old_state: int, bit_start: int):
+        for i in range(3):
+            bit = 1 << (bit_start - i)
+            if (new_state & bit) != (old_state & bit):
+                yield i + 1, bit
+
+    def _log_pump_state_changes(self, args: int):
+        for pump_id, bit in self._iter_changed_bits(args, self.pump_state, 5):
+            action = "starting" if args & bit else "stopping"
+            logger.info(f"{action} syrup pump {pump_id}")
+
+        for pump_id, bit in self._iter_changed_bits(args, self.pump_state, 2):
+            action = "starting" if args & bit else "stopping"
+            logger.info(f"{action} water pump {pump_id}")
+
+    def _handle_pouring(self, args: int):
+        if args == self.pump_state:
+            logger.info(f"Pump state unchanged: {self.pump_state}")
+        else:
+            self._log_pump_state_changes(args)
+        self.pump_state = args
+
+    def _handle_get_cups_state(self, reply: int) -> int:
+        states = [self.cups_state & (1 << (2 - i)) != 0 for i in range(3)]
+        if self.prev_cups_state != self.cups_state:
+            logger.info(f"Cups state changed: {self.cups_state:03b}")
+            self.prev_cups_state = self.cups_state
+        else:
+            logger.debug(f"Getting cups state : {states}")
+        return reply | ((self.cups_state & 0x07) << 3)
+
+    async def _handle_other(self, args: int) -> int | None:
+        if args == CMD_OTHER_RESET:
+            logger.info("RESET")
+            await asyncio.sleep(BOOT_TIME)
+            return None
+
+        if args == CMD_OTHER_CLEANING:
+            logger.info("Starting Cleaning Mode")
+            cleaning = asyncio.create_task(self.cleaning())
+            self.background_tasks.add(cleaning)
+            cleaning.add_done_callback(self.background_tasks.discard)
+
+        return 0
+
+    @override
+    async def cmd(self, message: int) -> int | None:
         cmd = (message >> 6) & 0x03
         args = message & 0x3F
 
         reply = message & 0xC0
 
-        if cmd == CMD_POURING:  # Set pump state
-            if args == self.pump_state:
-                logger.info(f"Pump state unchanged: {self.pump_state}")
-            else:
-                for i in range(3):
-                    bit = 1 << (5 - i)
-                    if (args & bit) != (self.pump_state & bit):
-                        action = "starting" if args & bit else "stopping"
-                        logger.info(f"{action} syrup pump {i+1}")
-                for i in range(3):
-                    bit = 1 << (2 - i)
-                    if (args & bit) != (self.pump_state & bit):
-                        action = "starting" if args & bit else "stopping"
-                        logger.info(f"{action} water pump {i+1}")
-            self.pump_state = args
-
-        elif cmd == CMD_GET_CUPS_STATE:  # Get cups state
-            states = [self.cups_state & (1 << (2 - i)) != 0 for i in range(3)]
-            if self.prev_cups_state != self.cups_state:
-                logger.info(f"Cups state changed: {self.cups_state:03b}")
-                self.prev_cups_state = self.cups_state
-            else:
-                logger.debug(f"Getting cups state : {states}")
-            reply |= (self.cups_state & 0x07) << 3
+        if cmd == CMD_POURING:
+            self._handle_pouring(args)
+        elif cmd == CMD_GET_CUPS_STATE:
+            reply = self._handle_get_cups_state(reply)
         elif cmd == CMD_OTHER:
-            if args == CMD_OTHER_RESET:
-                logger.info("RESET")
-                await asyncio.sleep(BOOT_TIME)
+            other_result = await self._handle_other(args)
+            if other_result is None:
                 return None
-            elif args == CMD_OTHER_CLEANING:
-                logger.info("Starting Cleaning Mode")
-                cleaning = asyncio.create_task(self.cleaning())
-                self.background_tasks.add(cleaning)
-                cleaning.add_done_callback(self.background_tasks.discard)
-
         else:
             logger.error(f"Unknown command: {cmd}")
 

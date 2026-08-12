@@ -12,3 +12,7 @@ class PumpsBase(ABC):
     @abstractmethod
     async def cmd(self, message: int) -> int | None:
         pass
+
+    @abstractmethod
+    async def connect(self):
+        pass

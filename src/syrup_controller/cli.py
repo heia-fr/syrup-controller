@@ -5,101 +5,80 @@
 import asyncio
 import sys
 from datetime import timedelta
-from typing import NamedTuple
+from typing import Annotated
 from urllib.parse import urlsplit
 
 from aiomqtt import Client as MQTTClient
 from loguru import logger
 from typer import Option, Typer
 
-from syrup_controller import SyrupController, context
-from syrup_controller.pumps.simulator import PumpsSimulator
-from syrup_controller.pumps.uart import PumpsUART
+from syrup_controller import SyrupController
+from syrup_controller.pumps import PumpsSimulator, PumpsUART
 
 app = Typer()
 
 
-class MqttConfig(NamedTuple):
-    url: str
-    base_topic: str
-    username: str | None
-    password: str | None
-
-
-class UartConfig(NamedTuple):
-    port: str | None
-    baudrate: int
-
-
-async def daemon(
-    mqtt_config: MqttConfig,
-    uart_config: UartConfig,
-):
-    if uart_config.port is None:
-        logger.info("Starting Controller with Pumps Simulator")
-        pumps = PumpsSimulator()
-    else:
-        logger.info("Starting Controller with Pumps UART")
-        pumps = await PumpsUART.create(uart_config.port, uart_config.baudrate)
-
-    o = urlsplit(mqtt_config.url)
-    if o.scheme not in ("mqtt", "mqtts"):
-        logger.error(f"Invalid MQTT URL: {mqtt_config.url}")
-        return
-
-    assert o.hostname is not None
-
-    hostname = o.hostname
-    port = o.port or (8883 if o.scheme == "mqtts" else 1883)
-
-    logger.info(f"Connecting to MQTT broker at {hostname}:{port}")
-    async with MQTTClient(
-        hostname=hostname,
-        port=port,
-        username=mqtt_config.username,
-        password=mqtt_config.password,
-    ) as client:
-        logger.debug(f"Subscribing to topic {mqtt_config.base_topic}/#")
-        await client.subscribe(f"{mqtt_config.base_topic}/#", qos=1)
-        controller = SyrupController(
-            pumps=pumps,
-            mqtt_client=client,
-            mqtt_base_topic=mqtt_config.base_topic,
-            do_check_cup=True,
-        )
-        logger.info(f"Base topic: {mqtt_config.base_topic}")
-        logger.info("Starting controller")
-        await controller.run()
-    logger.info("Exiting controller")
-
-
 @app.command()
-def main(  # noqa
+def main(  # noqa: PLR0913
     debug: bool = Option(False, help="Enable debug logging", envvar="SYRUP_DEBUG"),
     quiet: bool = Option(False, help="Enable quiet logging", envvar="SYRUP_QUIET"),
     simulator: bool = Option(False, help="Use pumps simulator instead of UART"),
-    uart_port: str | None = Option(
-        "/dev/ttyAMA0", help="UART port for pumps", envvar="SYRUP_UART_PORT"
-    ),
-    uart_baudrate: int = Option(
-        19200, help="UART baudrate for pumps", envvar="SYRUP_UART_BAUDRATE"
-    ),
-    mqtt_url: str = Option(
-        "mqtt://mqtt.local:1883",
-        help="MQTT broker URL",
-        envvar="SYRUP_MQTT_URL",
-    ),
-    mqtt_base_topic: str = Option(
-        "heiafr/ms/controller", help="MQTT base topic", envvar="SYRUP_MQTT_BASE_TOPIC"
-    ),
-    mqtt_username: str = Option(
-        None, help="MQTT username", envvar="SYRUP_MQTT_USERNAME"
-    ),
-    mqtt_password: str = Option(
-        None, help="MQTT password", envvar="SYRUP_MQTT_PASSWORD"
-    ),
+    *,
+    uart_port: Annotated[
+        str,
+        Option(
+            help="UART port for pumps",
+            envvar="SYRUP_UART_PORT",
+            rich_help_panel="UART Settings",
+        ),
+    ] = "/dev/ttyAMA0",
+    uart_baudrate: Annotated[
+        int,
+        Option(
+            help="UART baudrate for pumps",
+            envvar="SYRUP_UART_BAUDRATE",
+            rich_help_panel="UART Settings",
+        ),
+    ] = 19200,
+    mqtt_url: Annotated[
+        str,
+        Option(
+            help="MQTT broker URL",
+            envvar="SYRUP_MQTT_URL",
+            rich_help_panel="MQTT Settings",
+        ),
+    ] = "mqtt://mqtt.local:1883",
+    mqtt_base_topic: Annotated[
+        str,
+        Option(
+            help="MQTT base topic",
+            envvar="SYRUP_MQTT_BASE_TOPIC",
+            rich_help_panel="MQTT Settings",
+        ),
+    ] = "heiafr/ms/controller",
+    mqtt_username: Annotated[
+        str | None,
+        Option(
+            help="MQTT username",
+            envvar="SYRUP_MQTT_USERNAME",
+            rich_help_panel="MQTT Settings",
+        ),
+    ] = None,
+    mqtt_password: Annotated[
+        str | None,
+        Option(
+            help="MQTT password",
+            envvar="SYRUP_MQTT_PASSWORD",
+            rich_help_panel="MQTT Settings",
+        ),
+    ] = None,
     pour_duration: int = Option(
-        30, help="Duration of syrup pouring in seconds", envvar="SYRUP_POUR_DURATION"
+        20, help="Duration of syrup pouring in seconds", envvar="SYRUP_POUR_DURATION"
+    ),
+    ignore_cups_check: bool = Option(
+        False,
+        help="Ignore cup presence check",
+        envvar="SYRUP_IGNORE_CUPS_CHECK",
     ),
 ):
     """
@@ -119,27 +98,42 @@ def main(  # noqa
     else:
         logger.add(sys.stderr, level="INFO")
 
-    context["pour_duration"] = timedelta(seconds=pour_duration)
-
     if simulator:
         logger.info("Using pumps simulator")
-        uart_port = None
+        pumps = PumpsSimulator()
+    else:
+        pumps = PumpsUART(port=uart_port, baudrate=uart_baudrate)
+
+    o = urlsplit(mqtt_url)
+    if o.scheme not in ("mqtt", "mqtts"):
+        logger.error(f"Invalid MQTT URL: {mqtt_url}")
+        return
+
+    if o.hostname is None:
+        logger.error(f"Invalid MQTT URL: {mqtt_url}")
+        return
+
+    hostname = o.hostname
+    port = o.port or (8883 if o.scheme == "mqtts" else 1883)
+
+    logger.info(f"Connecting to MQTT broker at {hostname}:{port}")
+    mqtt_client = MQTTClient(
+        hostname=hostname,
+        port=port,
+        username=mqtt_username,
+        password=mqtt_password,
+    )
+
+    controller = SyrupController(
+        pumps=pumps,
+        mqtt_client=mqtt_client,
+        mqtt_base_topic=mqtt_base_topic,
+        do_check_cup=not ignore_cups_check,
+        pour_duration=timedelta(seconds=pour_duration),
+    )
 
     try:
-        asyncio.run(
-            daemon(
-                MqttConfig(
-                    url=mqtt_url,
-                    base_topic=mqtt_base_topic,
-                    username=mqtt_username,
-                    password=mqtt_password,
-                ),
-                UartConfig(
-                    port=uart_port,
-                    baudrate=uart_baudrate,
-                ),
-            )
-        )
+        asyncio.run(controller.run())
     except KeyboardInterrupt:
         logger.info("Exiting...")
 
