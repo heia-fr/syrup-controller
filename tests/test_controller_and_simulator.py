@@ -75,7 +75,7 @@ async def test_controller_reset_sends_reset_and_clears_state() -> None:
     assert pumps.messages[-1] == RESET_COMMAND
     assert controller.pouring == set()
     assert controller.stopping == {}
-    assert controller.rincing is False
+    assert controller.rincing_started is None
 
 
 def test_simulator_remove_cup_logs_message() -> None:
