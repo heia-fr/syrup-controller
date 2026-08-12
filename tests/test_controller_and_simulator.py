@@ -67,7 +67,7 @@ async def test_controller_reset_sends_reset_and_clears_state() -> None:
     controller = SyrupController(pumps=pumps, do_check_cup=False)
     controller.start_handler_if_needed = lambda: None
 
-    await controller.pour(0, duration=timedelta(seconds=1))
+    await controller.pour(1, duration=timedelta(seconds=1))
     assert controller.pouring
 
     await controller.reset()
