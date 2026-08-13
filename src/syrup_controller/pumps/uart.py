@@ -17,8 +17,8 @@ RESET_COMMAND = 0xC0  # Reset command for pumps
 
 @dataclass
 class PumpsUART(PumpsBase):
-    port: str = "/dev/ttyAMA0"
-    baudrate: int = 19200
+    port: str
+    baudrate: int
     stream_reader: asyncio.StreamReader | None = None
     stream_writer: asyncio.StreamWriter | None = None
 

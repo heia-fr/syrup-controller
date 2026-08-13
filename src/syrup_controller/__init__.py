@@ -236,14 +236,38 @@ class SyrupController:
         elif topic.endswith("/rinse"):
             await self._handle_rinse_command(payload)
 
+    async def _process_messages(self, client: MQTTClient):
+        async for message in client.messages:
+            topic = str(message.topic)
+            payload = message.payload.decode()
+            logger.debug(f"Received MQTT message: {topic} -> {payload}")
+            await self._dispatch_message(topic, payload)
+
     # Main run loop
-    async def run(self):
+    async def run(self, stop_event: asyncio.Event | None = None):
         await self.pumps.connect()
-        async with self.mqtt_client as client:
-            logger.debug(f"Subscribing to topic {self.mqtt_base_topic}/#")
+        client = await self.mqtt_client.__aenter__()
+        try:
+            logger.info(f"Subscribing to topic {self.mqtt_base_topic}/#")
             await client.subscribe(f"{self.mqtt_base_topic}/#", qos=1)
-            async for message in self.mqtt_client.messages:
-                topic = str(message.topic)
-                payload = message.payload.decode()
-                logger.debug(f"Received MQTT message: {topic} -> {payload}")
-                await self._dispatch_message(topic, payload)
+            if stop_event is None:
+                await self._process_messages(client)
+            else:
+                message_task = asyncio.create_task(self._process_messages(client))
+                stop_task = asyncio.create_task(stop_event.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        (message_task, stop_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if message_task in done:
+                        await message_task
+                finally:
+                    for task in (message_task, stop_task):
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(
+                        message_task, stop_task, return_exceptions=True
+                    )
+        finally:
+            await self.mqtt_client.__aexit__(None, None, None)

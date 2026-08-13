@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 import asyncio
+import signal
 import sys
 from datetime import timedelta
 from typing import Annotated
@@ -10,7 +11,7 @@ from urllib.parse import urlsplit
 
 from aiomqtt import Client as MQTTClient
 from loguru import logger
-from typer import Option, Typer
+from typer import Exit, Option, Typer
 
 from syrup_controller import SyrupController
 from syrup_controller.pumps import PumpsSimulator, PumpsUART
@@ -31,7 +32,7 @@ def main(  # noqa: PLR0913
             envvar="SYRUP_UART_PORT",
             rich_help_panel="UART Settings",
         ),
-    ] = "/dev/ttyAMA0",
+    ] = "/dev/ttyUSB0",
     uart_baudrate: Annotated[
         int,
         Option(
@@ -116,26 +117,63 @@ def main(  # noqa: PLR0913
     hostname = o.hostname
     port = o.port or (8883 if o.scheme == "mqtts" else 1883)
 
-    logger.info(f"Connecting to MQTT broker at {hostname}:{port}")
-    mqtt_client = MQTTClient(
-        hostname=hostname,
-        port=port,
-        username=mqtt_username,
-        password=mqtt_password,
-    )
-
-    controller = SyrupController(
-        pumps=pumps,
-        mqtt_client=mqtt_client,
-        mqtt_base_topic=mqtt_base_topic,
-        do_check_cup=not ignore_cups_check,
-        pour_duration=timedelta(seconds=pour_duration),
-    )
-
     try:
-        asyncio.run(controller.run())
+        asyncio.run(
+            _run_controller(
+                pumps=pumps,
+                hostname=hostname,
+                port=port,
+                mqtt_username=mqtt_username,
+                mqtt_password=mqtt_password,
+                mqtt_base_topic=mqtt_base_topic,
+                do_check_cup=not ignore_cups_check,
+                pour_duration=timedelta(seconds=pour_duration),
+            )
+        )
     except KeyboardInterrupt:
         logger.info("Exiting...")
+    except Exception as e:
+        logger.error(f"{e}")
+        raise Exit(code=1) from e
+
+
+async def _run_controller(  # noqa: PLR0913
+    *,
+    pumps: PumpsUART | PumpsSimulator,
+    hostname: str,
+    port: int,
+    mqtt_username: str | None,
+    mqtt_password: str | None,
+    mqtt_base_topic: str,
+    do_check_cup: bool,
+    pour_duration: timedelta,
+) -> None:
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, stop_event.set)
+    loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+
+    logger.info(f"Connecting to MQTT broker at {hostname}:{port}")
+    try:
+        mqtt_client = MQTTClient(
+            hostname=hostname,
+            port=port,
+            username=mqtt_username,
+            password=mqtt_password,
+        )
+        controller = SyrupController(
+            pumps=pumps,
+            mqtt_client=mqtt_client,
+            mqtt_base_topic=mqtt_base_topic,
+            do_check_cup=do_check_cup,
+            pour_duration=pour_duration,
+        )
+        logger.info("Starting syrup controller")
+        await controller.run(stop_event=stop_event)
+        logger.info("Exiting...")
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 if __name__ == "__main__":
