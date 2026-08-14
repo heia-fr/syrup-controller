@@ -141,10 +141,12 @@ class SyrupController:
     async def reset(self):
         logger.info("Resetting Syrup Controller")
         await self.pumps.cmd(RESET_COMMAND)  # Reset command
+        for syrup in list(self.pouring):
+            await self._send_done(syrup)
         self.pouring.clear()
         self.stopping.clear()
         self.rincing_started = None
-        if self.handler:
+        if self.handler is not None:
             self.handler.cancel()
             self.handler = None
 
@@ -162,9 +164,14 @@ class SyrupController:
         else:
             logger.info("Stopping all pumps")
             await self.pumps.cmd(0x00)  # Stop all pumps
-        self.rincing_started = None
+        for syrup in list(self.pouring):
+            await self._send_done(syrup)
         self.pouring.clear()
         self.stopping.clear()
+        self.rincing_started = None
+        if self.handler is not None:
+            self.handler.cancel()
+            self.handler = None
 
     async def _rinse(self, duration: timedelta | None = timedelta(seconds=10)):
         if self.rincing_started is not None:
