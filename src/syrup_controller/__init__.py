@@ -141,8 +141,11 @@ class SyrupController:
     async def reset(self):
         logger.info("Resetting Syrup Controller")
         await self.pumps.cmd(RESET_COMMAND)  # Reset command
-        for syrup in list(self.pouring):
-            await self._send_done(syrup)
+        try:
+            for syrup in list(self.pouring):
+                await self._send_done(syrup)
+        except Exception as e:
+            logger.error(f"Error sending done messages during reset: {e}")
         self.pouring.clear()
         self.stopping.clear()
         self.rincing_started = None
@@ -164,8 +167,11 @@ class SyrupController:
         else:
             logger.info("Stopping all pumps")
             await self.pumps.cmd(0x00)  # Stop all pumps
-        for syrup in list(self.pouring):
-            await self._send_done(syrup)
+        try:
+            for syrup in list(self.pouring):
+                await self._send_done(syrup)
+        except Exception as e:
+            logger.error(f"Error sending done messages during stop all: {e}")
         self.pouring.clear()
         self.stopping.clear()
         self.rincing_started = None
