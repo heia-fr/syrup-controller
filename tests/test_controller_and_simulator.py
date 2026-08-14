@@ -8,7 +8,7 @@ import pytest
 from aiomqtt import Client as MQTTClient
 from loguru import logger
 
-from syrup_controller import RESET_COMMAND, SyrupController
+from syrup_controller import CMD_RESET, SyrupController
 from syrup_controller.pumps.base import PumpsBase
 from syrup_controller.pumps.simulator import PumpsSimulator
 
@@ -86,7 +86,7 @@ async def test_controller_reset_sends_reset_and_clears_state() -> None:
 
     await controller.reset()
 
-    assert pumps.messages[-1] == RESET_COMMAND
+    assert pumps.messages[-1] == CMD_RESET
     assert controller.pouring == set()
     assert controller.stopping == {}
     assert controller.rincing_started is None

@@ -11,8 +11,13 @@ from loguru import logger
 from syrup_controller.pumps import PumpsBase
 
 MAX_SYRUPS = 3
-RESET_COMMAND = 0xC1  # Reset command for pumps
+CMD_RESET = 0xC1  # Reset command for pumps
+CMD_STOP_ALL = 0x00  # Stop all pumps command
+CMD_CHECK_CUPS = 0x40  # Command to check cups state
+CMD_RINSE = 0xC2  # Command to start cleaning mode
+
 RINCE_STARTUP_TIME = timedelta(seconds=8)
+TASK_SLEEP_TIME = 0.2  # seconds
 
 RINSE_BUTTON = 8
 RESET_BUTTON = 9
@@ -50,10 +55,10 @@ class SyrupController:
             self.stop_rince = None
             self.pouring.clear()
             self.stopping.clear()
-            await self.pumps.cmd(0x00)  # Stop all pumps
+            await self.pumps.cmd(CMD_STOP_ALL)  # Stop all pumps
 
     async def _check_cups(self):
-        cups = await self.pumps.cmd(0x40)  # Get cups state
+        cups = await self.pumps.cmd(CMD_CHECK_CUPS)  # Get cups state
         # Check cups for syrups that are currently pouring
         for syrup in list(self.pouring):
             if not (cups & (1 << (6 - syrup))):
@@ -96,7 +101,7 @@ class SyrupController:
                 self.handler = None
                 return
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(TASK_SLEEP_TIME)
 
     def _start_handler_if_needed(self):
         if self.handler is None:
@@ -140,7 +145,7 @@ class SyrupController:
 
     async def reset(self):
         logger.info("Resetting Syrup Controller")
-        await self.pumps.cmd(RESET_COMMAND)  # Reset command
+        await self.pumps.cmd(CMD_RESET)  # Reset command
         try:
             for syrup in list(self.pouring):
                 await self._send_done(syrup)
@@ -166,7 +171,7 @@ class SyrupController:
             await self.reset()
         else:
             logger.info("Stopping all pumps")
-            await self.pumps.cmd(0x00)  # Stop all pumps
+            await self.pumps.cmd(CMD_STOP_ALL)  # Stop all pumps
         try:
             for syrup in list(self.pouring):
                 await self._send_done(syrup)
@@ -191,7 +196,7 @@ class SyrupController:
             self.stop_rince = None
         else:
             self.stop_rince = now + duration
-        await self.pumps.cmd(0xC2)  # Start cleaning mode
+        await self.pumps.cmd(CMD_RINSE)  # Start cleaning mode
         self._start_handler_if_needed()
 
     @staticmethod
