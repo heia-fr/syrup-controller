@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supci@hefr.ch>
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
 #
 # SPDX-License-Identifier: MIT
 
@@ -85,7 +85,7 @@ def main(  # noqa: PLR0913
     """
     SYRUP-CONTROLLER
 
-    This program is the gateway between MQTT messages and the pumps of th syrup
+    This program is the gateway between MQTT messages and the pumps of the syrup
     machine. It is designed to be run on a Raspberry Pi connected to the pumps
     via UART.
 

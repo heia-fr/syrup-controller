@@ -1,9 +1,9 @@
-# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supci@hefr.ch>
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
 #
 # SPDX-License-Identifier: MIT
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import override
 
 import serial_asyncio
@@ -21,25 +21,28 @@ class PumpsUART(PumpsBase):
     baudrate: int
     stream_reader: asyncio.StreamReader | None = None
     stream_writer: asyncio.StreamWriter | None = None
+    # Replies carry no ID: only one command may be in flight at a time.
+    command_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     @override
     async def cmd(self, message: int) -> int | None:
         if self.stream_writer is None or self.stream_reader is None:
             raise RuntimeError("UART connection not established")
 
-        await self.stream_writer.drain()
-        self.stream_writer.write(bytes([message]))
-        await self.stream_writer.drain()
+        async with self.command_lock:
+            await self.stream_writer.drain()
+            self.stream_writer.write(bytes([message]))
+            await self.stream_writer.drain()
 
-        if message & 0xC0 == RESET_COMMAND:  # Reset command, no reply expected
-            return None
+            if message & 0xC0 == RESET_COMMAND:  # Reset command, no reply expected
+                return None
 
-        try:
-            async with asyncio.timeout(CMD_TIMEOUT):
-                result = await self.stream_reader.read(1)
-        except TimeoutError:
-            logger.warning("Command timed out")
-            return None
+            try:
+                async with asyncio.timeout(CMD_TIMEOUT):
+                    result = await self.stream_reader.read(1)
+            except TimeoutError:
+                logger.warning("Command timed out")
+                return None
 
         if len(result) == 0:
             logger.warning("No reply received")

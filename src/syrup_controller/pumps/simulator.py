@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supci@hefr.ch>
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
 #
 # SPDX-License-Identifier: MIT
 
@@ -50,11 +50,11 @@ class PumpsSimulator(PumpsBase):
     def _log_pump_state_changes(self, args: int):
         for pump_id, bit in self._iter_changed_bits(args, self.pump_state, 5):
             action = "starting" if args & bit else "stopping"
-            logger.info(f"{action} syrup pump {pump_id}")
+            logger.info(f"{action} water pump {pump_id}")
 
         for pump_id, bit in self._iter_changed_bits(args, self.pump_state, 2):
             action = "starting" if args & bit else "stopping"
-            logger.info(f"{action} water pump {pump_id}")
+            logger.info(f"{action} syrup pump {pump_id}")
 
     def _handle_pouring(self, args: int):
         if args == self.pump_state:

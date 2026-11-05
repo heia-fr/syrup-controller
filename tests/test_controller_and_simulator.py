@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supci@hefr.ch>
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
 #
 # SPDX-License-Identifier: MIT
 
@@ -62,12 +62,10 @@ async def test_controller_pour_and_stop_update_internal_state() -> None:
     await controller._pour(1, duration=timedelta(seconds=1))
 
     assert 1 in controller.pouring
-    assert 1 in controller.stopping
 
     await controller._stop(1)
 
     assert 1 not in controller.pouring
-    assert 1 not in controller.stopping
 
 
 @pytest.mark.asyncio
@@ -87,9 +85,8 @@ async def test_controller_reset_sends_reset_and_clears_state() -> None:
     await controller.reset()
 
     assert pumps.messages[-1] == CMD_RESET
-    assert controller.pouring == set()
-    assert controller.stopping == {}
-    assert controller.rincing_started is None
+    assert controller.pouring == {}
+    assert controller.rinsing_started is None
 
 
 def test_simulator_remove_cup_logs_message() -> None:

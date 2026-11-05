@@ -1,9 +1,11 @@
-# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supci@hefr.ch>
+# SPDX-FileCopyrightText: 2026 Jacques Supcik <jacques.supcik@hefr.ch>
 #
 # SPDX-License-Identifier: MIT
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 
 from aiomqtt import Client as MQTTClient
 from loguru import logger
@@ -16,11 +18,53 @@ CMD_STOP_ALL = 0x00  # Stop all pumps command
 CMD_CHECK_CUPS = 0x40  # Command to check cups state
 CMD_RINSE = 0xC2  # Command to start cleaning mode
 
-RINCE_STARTUP_TIME = timedelta(seconds=8)
+RINSE_STARTUP_TIME = timedelta(seconds=8)
 TASK_SLEEP_TIME = 0.2  # seconds
 
 RINSE_BUTTON = 8
 RESET_BUTTON = 9
+
+MAX_RINSE_DURATION_SECONDS = 3600
+
+
+def _parse_json_object(payload: str, command_name: str) -> dict[str, Any] | None:
+    """Return the JSON object in `payload`, or None after logging if there is none."""
+    try:
+        request = json.loads(payload)
+    except (ValueError, RecursionError) as e:
+        logger.error(f"Invalid JSON in {command_name} command: {e}")
+        return None
+    if not isinstance(request, dict):
+        logger.error(f"Expected a JSON object in {command_name} command: {payload}")
+        return None
+    return request
+
+
+def _parse_syrup(request: dict[str, Any], command_name: str) -> int | None:
+    """Return the integer `syrup` field, or None after logging if it is invalid."""
+    syrup = request.get("syrup")
+    if isinstance(syrup, bool) or not isinstance(syrup, int):
+        logger.error(f"Invalid syrup number in {command_name} command: {syrup}")
+        return None
+    return syrup
+
+
+def _parse_bool_option(
+    request: dict[str, Any], name: str, default: bool
+) -> bool | None:
+    """Return the boolean option `name`, or None after logging if it is invalid."""
+    value = request.get(name, default)
+    if not isinstance(value, bool):
+        logger.error(f"Invalid {name} in pour command: {value}")
+        return None
+    return value
+
+
+@dataclass
+class PourRequest:
+    stop_time: datetime
+    check_cup: bool = True
+    water_only: bool = False
 
 
 @dataclass
@@ -31,11 +75,13 @@ class SyrupController:
     do_check_cup: bool = True
     pour_duration: timedelta = timedelta(seconds=20)
     rinse_duration: timedelta = timedelta(seconds=30)
-    pouring: set = field(default_factory=set)
-    stopping: dict = field(default_factory=dict)
+    pouring: dict[int, PourRequest] = field(default_factory=dict)
+    # Finished pours whose done message is waiting for the pump command to be sent
+    pending_done: list[int] = field(default_factory=list)
+
     handler = None
-    rincing_started: datetime | None = None
-    stop_rince: datetime | None = None
+    rinsing_started: datetime | None = None
+    stop_rinse: datetime | None = None
 
     async def _send_done(self, syrup: int):
         assert self.mqtt_client is not None
@@ -47,58 +93,102 @@ class SyrupController:
 
     async def _check_finish_rinse(self):
         now = datetime.now()
-        if self.stop_rince is None:
+        if self.stop_rinse is None:
             return
-        elif now >= self.stop_rince:
+        elif now >= self.stop_rinse:
             logger.info("Stopping rinse process")
-            self.rincing_started = None
-            self.stop_rince = None
+            self.rinsing_started = None
+            self.stop_rinse = None
             self.pouring.clear()
-            self.stopping.clear()
             await self.pumps.cmd(CMD_STOP_ALL)  # Stop all pumps
+
+    def _finish_pour(self, syrup: int):
+        """End a pour; its done message follows once the pump command is sent."""
+        del self.pouring[syrup]
+        self.pending_done.append(syrup)
+
+    async def _publish_pending_done(self):
+        for syrup in list(self.pending_done):
+            await self._send_done(syrup)
+            self.pending_done.remove(syrup)
+
+    async def _finish_all_pours(self):
+        """Report every pour as done, tolerating MQTT failures, and clear state."""
+        try:
+            for syrup in [*self.pending_done, *self.pouring]:
+                await self._send_done(syrup)
+        except Exception as e:
+            logger.error(f"Error sending done messages: {e}")
+        self.pending_done.clear()
+        self.pouring.clear()
+        self.rinsing_started = None
 
     async def _check_cups(self):
         cups = await self.pumps.cmd(CMD_CHECK_CUPS)  # Get cups state
-        # Check cups for syrups that are currently pouring
-        for syrup in list(self.pouring):
-            if not (cups & (1 << (6 - syrup))):
-                logger.warning(f"Cup for syrup {syrup} is missing!")
-                self.pouring.discard(syrup)
-                if syrup in self.stopping:
-                    del self.stopping[syrup]
-                await self._send_done(syrup)
+        if cups is None:
+            logger.error("Failed to get cups state")
+        # Check cups for syrups that are currently pouring. An unknown state counts
+        # as a missing cup, so that a silent board cannot leave the pumps running.
+        for syrup, request in list(self.pouring.items()):
+            if not request.check_cup:
+                continue
+            if cups is None or not (cups & (1 << (6 - syrup))):
+                logger.warning(f"Cup for syrup {syrup} is missing or unknown!")
+                self._finish_pour(syrup)
 
-    async def _check_finish(self):
+    def _check_finish(self):
         now = datetime.now()
-        for syrup, stop_time in list(self.stopping.items()):
-            if now >= stop_time:
+        for syrup, request in list(self.pouring.items()):
+            if now >= request.stop_time:
                 logger.info(f"Stopping syrup {syrup}")
-                self.pouring.discard(syrup)
-                del self.stopping[syrup]
-                await self._send_done(syrup)
+                self._finish_pour(syrup)
+
+    def _pump_command(self) -> int:
+        """Return the pump command: bits 5-3 drive water, bits 2-0 drive syrup."""
+        assert all(1 <= syrup <= MAX_SYRUPS for syrup in self.pouring)
+        msg = 0
+        for syrup, request in self.pouring.items():
+            msg |= 1 << (6 - syrup)
+            if not request.water_only:
+                msg |= 1 << (3 - syrup)
+        return msg
 
     async def _task(self):
-        prev_message = None
         logger.info("Starting Syrup Controller task")
-        while True:
+        try:
+            await self._control_pumps()
+        except Exception:
+            logger.exception("Syrup Controller task failed, stopping all pumps")
+            await self.pumps.cmd(CMD_STOP_ALL)
+            await self._finish_all_pours()
+        finally:
+            self.handler = None
 
-            if self.rincing_started is not None:
+    async def _control_pumps(self):
+        prev_message = None
+        while True:
+            if self.rinsing_started is not None:
                 await self._check_finish_rinse()
             else:
-                if self.do_check_cup:
+                do_check_cup = any(
+                    request.check_cup for request in self.pouring.values()
+                )
+                if do_check_cup:
                     await self._check_cups()
-                await self._check_finish()
-                msg = 0
-                for i in self.pouring:
-                    msg |= 1 << (6 - i) | 1 << (3 - i)
+                self._check_finish()
+                msg = self._pump_command()
                 if msg != prev_message:
                     logger.info(f"Sending command: {msg:08b}")
                     await self.pumps.cmd(msg)
                     prev_message = msg
+                # Only after the pump command: a slow broker must not delay the stop.
+                await self._publish_pending_done()
 
-            if len(self.pouring) == 0 and self.rincing_started is None:
+            # A pour may end while its command is being sent, so also require that
+            # the last command sent left the pumps off (None: nothing was sent).
+            pumps_off = not prev_message
+            if not self.pouring and self.rinsing_started is None and pumps_off:
                 logger.info("No more syrups pouring, stopping task")
-                self.handler = None
                 return
 
             await asyncio.sleep(TASK_SLEEP_TIME)
@@ -107,8 +197,24 @@ class SyrupController:
         if self.handler is None:
             self.handler = asyncio.create_task(self._task())
 
-    async def _pour(self, syrup: int, duration: timedelta):
-        if self.rincing_started is not None:
+    async def _cancel_handler(self):
+        """Cancel the task and wait for it, so it cannot send any further command."""
+        if self.handler is None:
+            return
+        handler = self.handler
+        self.handler = None
+        handler.cancel()
+        # The outcome is deliberately ignored: _task logs its own failures.
+        await asyncio.gather(handler, return_exceptions=True)
+
+    async def _pour(
+        self,
+        syrup: int,
+        duration: timedelta,
+        water_only: bool = False,
+        check_cup: bool = True,
+    ):
+        if self.rinsing_started is not None:
             logger.warning("Cannot pour syrup while rinsing")
             await self._send_done(syrup)
             return
@@ -118,15 +224,18 @@ class SyrupController:
         if syrup in self.pouring:
             logger.warning(f"Syrup {syrup} is already pouring")
             return
-        # We don't really start the punp here, we just add it to the list of pouring
+        # We don't really start the pump here, we just add it to the list of pouring
         # syrups and let the task handle it
-        self.pouring.add(syrup)
-        self.stopping[syrup] = datetime.now() + duration
-
+        request = PourRequest(
+            check_cup=check_cup,
+            water_only=water_only,
+            stop_time=datetime.now() + duration,
+        )
+        self.pouring[syrup] = request
         self._start_handler_if_needed()
 
     async def _stop(self, syrup: int):
-        if self.rincing_started is not None:
+        if self.rinsing_started is not None:
             logger.warning("Cannot stop syrup while rinsing")
             return
         if syrup < 1 or syrup > MAX_SYRUPS:
@@ -137,32 +246,21 @@ class SyrupController:
             return
         # We don't really stop the pump here, we just remove it from the list of pouring
         # syrups and let the task handle it
-        self.pouring.discard(syrup)
-        if syrup in self.stopping:
-            del self.stopping[syrup]
-
+        del self.pouring[syrup]
         self._start_handler_if_needed()
 
     async def reset(self):
         logger.info("Resetting Syrup Controller")
+        await self._cancel_handler()
         await self.pumps.cmd(CMD_RESET)  # Reset command
-        try:
-            for syrup in list(self.pouring):
-                await self._send_done(syrup)
-        except Exception as e:
-            logger.error(f"Error sending done messages during reset: {e}")
-        self.pouring.clear()
-        self.stopping.clear()
-        self.rincing_started = None
-        if self.handler is not None:
-            self.handler.cancel()
-            self.handler = None
+        await self._finish_all_pours()
 
     async def _stop_all(self):
+        await self._cancel_handler()
         now = datetime.now()
         if (
-            self.rincing_started is not None
-            and now - self.rincing_started < RINCE_STARTUP_TIME
+            self.rinsing_started is not None
+            and now - self.rinsing_started < RINSE_STARTUP_TIME
         ):
             logger.warning(
                 "Cannot stop all pumps while rinsing has just started. "
@@ -172,48 +270,33 @@ class SyrupController:
         else:
             logger.info("Stopping all pumps")
             await self.pumps.cmd(CMD_STOP_ALL)  # Stop all pumps
-        try:
-            for syrup in list(self.pouring):
-                await self._send_done(syrup)
-        except Exception as e:
-            logger.error(f"Error sending done messages during stop all: {e}")
-        self.pouring.clear()
-        self.stopping.clear()
-        self.rincing_started = None
-        if self.handler is not None:
-            self.handler.cancel()
-            self.handler = None
+        await self._finish_all_pours()
 
     async def _rinse(self, duration: timedelta | None = timedelta(seconds=10)):
-        if self.rincing_started is not None:
+        if self.rinsing_started is not None:
             logger.warning("Already rinsing, ignoring rinse command")
             return
         await self._stop_all()
         now = datetime.now()
         logger.info("Starting rinse process")
-        self.rincing_started = now
+        self.rinsing_started = now
         if duration is None:
-            self.stop_rince = None
+            self.stop_rinse = None
         else:
-            self.stop_rince = now + duration
+            self.stop_rinse = now + duration
         await self.pumps.cmd(CMD_RINSE)  # Start cleaning mode
         self._start_handler_if_needed()
 
-    @staticmethod
-    def _parse_int_payload(payload: str, command_name: str) -> int | None:
-        try:
-            return int(payload)
-        except ValueError:
-            logger.error(f"Invalid payload for {command_name} command: {payload}")
-            return None
-
     # Message handling
     async def _handle_button_command(self, payload: str):
-        syrup = self._parse_int_payload(payload, "button")
-        if syrup is None:
+        try:
+            syrup = int(payload)
+        except ValueError:
+            logger.error(f"Invalid payload for button command: {payload}")
             return
+
         if 1 <= syrup <= MAX_SYRUPS:
-            await self._pour(syrup, self.pour_duration)
+            await self._pour(syrup, self.pour_duration, check_cup=self.do_check_cup)
         elif syrup == RINSE_BUTTON:
             await self._rinse(self.rinse_duration)
         elif syrup == RESET_BUTTON:
@@ -222,20 +305,39 @@ class SyrupController:
             logger.error(f"Invalid syrup number for button command: {syrup}")
 
     async def _handle_pour_command(self, payload: str):
-        syrup = self._parse_int_payload(payload, "pour")
-        if syrup is None:
+        req = _parse_json_object(payload, "pour")
+        if req is None:
             return
-        await self._pour(syrup, self.pour_duration)
+        syrup = _parse_syrup(req, "pour")
+        do_check_cup = _parse_bool_option(req, "check_cup", self.do_check_cup)
+        water_only = _parse_bool_option(req, "water_only", False)
+        if syrup is None or do_check_cup is None or water_only is None:
+            return
+        await self._pour(
+            syrup, self.pour_duration, check_cup=do_check_cup, water_only=water_only
+        )
 
     async def _handle_stop_command(self, payload: str):
-        syrup = self._parse_int_payload(payload, "stop")
+        req = _parse_json_object(payload, "stop")
+        if req is None:
+            return
+        syrup = _parse_syrup(req, "stop")
         if syrup is None:
             return
         await self._stop(syrup)
 
     async def _handle_rinse_command(self, payload: str):
-        sec = self._parse_int_payload(payload, "rinse")
-        if sec is None:
+        req = _parse_json_object(payload, "rinse")
+        if req is None:
+            return
+        sec = req.get("duration")
+        # The range check also rejects NaN and the infinities.
+        if (
+            isinstance(sec, bool)
+            or not isinstance(sec, (int, float))
+            or not -MAX_RINSE_DURATION_SECONDS <= sec <= MAX_RINSE_DURATION_SECONDS
+        ):
+            logger.error(f"Invalid duration in rinse command: {sec}")
             return
         await self._rinse(timedelta(seconds=sec) if sec > 0 else None)
 
@@ -257,7 +359,11 @@ class SyrupController:
     async def _process_messages(self, client: MQTTClient):
         async for message in client.messages:
             topic = str(message.topic)
-            payload = message.payload.decode()
+            try:
+                payload = message.payload.decode()
+            except UnicodeDecodeError as e:
+                logger.error(f"Ignoring non UTF-8 MQTT message on {topic}: {e}")
+                continue
             logger.debug(f"Received MQTT message: {topic} -> {payload}")
             await self._dispatch_message(topic, payload)
 
@@ -288,4 +394,7 @@ class SyrupController:
                         message_task, stop_task, return_exceptions=True
                     )
         finally:
-            await self.mqtt_client.__aexit__(None, None, None)
+            try:
+                await self._stop_all()  # Never leave the pumps running on exit
+            finally:
+                await self.mqtt_client.__aexit__(None, None, None)
